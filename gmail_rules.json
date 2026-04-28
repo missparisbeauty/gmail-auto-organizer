@@ -1,0 +1,62 @@
+{
+  "labels": [
+    {
+      "name": "工作",
+      "color": "blue",
+      "rules": {
+        "senders": ["boss@company.com", "hr@company.com"],
+        "subject_keywords": ["會議", "報告", "專案", "deadline", "meeting", "project"],
+        "body_keywords": ["請確認", "請回覆", "敬請", "附件"]
+      }
+    },
+    {
+      "name": "購物",
+      "color": "green",
+      "rules": {
+        "senders": ["no-reply@shopee.com", "noreply@momo.com", "service@pchome.com.tw"],
+        "subject_keywords": ["訂單", "出貨", "到貨", "發票", "order", "shipped", "tracking"],
+        "body_keywords": ["訂單編號", "物流", "宅配"]
+      }
+    },
+    {
+      "name": "銀行/帳單",
+      "color": "red",
+      "rules": {
+        "senders": ["service@esun.com.tw", "eservice@ctbcbank.com", "ecmail@nccc.com.tw"],
+        "subject_keywords": ["帳單", "繳費", "對帳單", "信用卡", "存款", "轉帳", "statement", "invoice"],
+        "body_keywords": ["應繳金額", "帳單日", "繳款期限"]
+      }
+    },
+    {
+      "name": "電子報",
+      "color": "yellow",
+      "rules": {
+        "senders": [],
+        "subject_keywords": ["newsletter", "電子報", "最新消息", "優惠", "特賣", "週報"],
+        "body_keywords": ["取消訂閱", "unsubscribe", "退訂"]
+      }
+    },
+    {
+      "name": "社群通知",
+      "color": "purple",
+      "rules": {
+        "senders": ["notification@facebookmail.com", "no-reply@accounts.google.com", "notify@twitter.com"],
+        "subject_keywords": ["提到你", "留言", "按讚", "追蹤", "mentioned you", "commented"],
+        "body_keywords": []
+      }
+    }
+  ],
+  "spam_rules": {
+    "delete_after_days": 0,
+    "sender_blacklist": [],
+    "subject_blacklist": [
+      "你中獎了", "恭喜獲選", "免費贈品", "點擊領取",
+      "you have won", "congratulations winner", "free gift", "click to claim",
+      "enlargement", "erectile", "casino", "lottery winner"
+    ],
+    "body_blacklist": [
+      "點擊此連結領取獎品", "限時24小時", "急！急！急！"
+    ],
+    "move_to_trash_instead_of_delete": true
+  }
+}

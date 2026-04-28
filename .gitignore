@@ -1,0 +1,20 @@
+# 敏感憑證（絕對不上傳）
+credentials.json
+token.json
+*.json
+!gmail_rules.json
+
+# Log 檔
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.env
+venv/
+.venv/
+
+# Windows
+Thumbs.db
+desktop.ini
