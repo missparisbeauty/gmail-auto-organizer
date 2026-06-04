@@ -50,7 +50,6 @@ function organizeGmail() {
 
   let totalLabeled = 0;
   let totalSpam    = 0;
-  let totalPurged  = 0;
 
   // 步驟 1：分類收件匣郵件
   const inbox = GmailApp.getInboxThreads(0, 200);
@@ -79,18 +78,8 @@ function organizeGmail() {
     }
   }
 
-  // 步驟 2：清空垃圾桶
-  const trashThreads = GmailApp.search("in:trash", 0, 500);
-  for (const thread of trashThreads) {
-    try {
-      Gmail.Users.Threads.remove("me", thread.getId());
-      totalPurged++;
-    } catch (e) {
-      console.log("清除失敗: " + e.message);
-    }
-  }
-
-  console.log(`完成！分類: ${totalLabeled} 封，垃圾: ${totalSpam} 封，清空垃圾桶: ${totalPurged} 封`);
+  // 垃圾僅移至垃圾桶，交由 Gmail 30 天後自動清除（不主動永久刪除）
+  console.log(`完成！分類: ${totalLabeled} 封，垃圾: ${totalSpam} 封`);
 }
 
 // ── 輔助函數 ──────────────────────────────────────────────

@@ -5,9 +5,7 @@ Gmail 自動整理工具
 功能: 自動分類標籤、刪除垃圾郵件
 """
 
-import os
 import json
-import base64
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -74,25 +72,32 @@ LABEL_COLORS = {
     "purple": {"backgroundColor": "#a479e2", "textColor": "#ffffff"},
 }
 
-def get_or_create_label(service, name: str, color: str) -> str:
-    """取得或建立 Gmail 標籤，回傳 label_id"""
+def build_label_map(service, label_cfgs) -> dict:
+    """一次取得現有標籤，缺的才建立，回傳 {name: label_id}"""
     results = service.users().labels().list(userId="me").execute()
     existing = {lbl["name"]: lbl["id"] for lbl in results.get("labels", [])}
 
-    if name in existing:
-        return existing[name]
+    label_map = {}
+    for cfg in label_cfgs:
+        name = cfg["name"]
+        if name in existing:
+            label_map[name] = existing[name]
+            continue
 
-    body = {
-        "name": name,
-        "labelListVisibility": "labelShow",
-        "messageListVisibility": "show",
-    }
-    if color in LABEL_COLORS:
-        body["color"] = LABEL_COLORS[color]
+        body = {
+            "name": name,
+            "labelListVisibility": "labelShow",
+            "messageListVisibility": "show",
+        }
+        color = cfg.get("color", "blue")
+        if color in LABEL_COLORS:
+            body["color"] = LABEL_COLORS[color]
 
-    created = service.users().labels().create(userId="me", body=body).execute()
-    log.info(f"建立標籤: {name}")
-    return created["id"]
+        created = service.users().labels().create(userId="me", body=body).execute()
+        log.info(f"建立標籤: {name}")
+        label_map[name] = created["id"]
+
+    return label_map
 
 
 # ── 郵件搜尋與讀取 ────────────────────────────────────────────────────
@@ -108,16 +113,37 @@ def search_messages(service, query: str, max_results: int = 500):
             break
     return messages[:max_results]
 
-def get_message_headers(service, msg_id: str) -> dict:
-    """取得郵件標頭（寄件者、主題）與 snippet"""
-    msg = service.users().messages().get(
-        userId="me", id=msg_id, format="metadata",
-        metadataHeaders=["From", "Subject", "To"]
-    ).execute()
-    headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
-    headers["snippet"] = msg.get("snippet", "")
-    headers["label_ids"] = msg.get("labelIds", [])
-    return headers
+def batch_get_headers(service, messages) -> dict:
+    """批次取得多封郵件的標頭與 snippet，回傳 {msg_id: headers}
+
+    以 Gmail batch API 一次送出多個 get，取代逐封 HTTP 往返。
+    """
+    headers_map = {}
+
+    def _callback(request_id, response, exception):
+        if exception is not None:
+            log.warning(f"讀取郵件 {request_id} 失敗: {exception}")
+            return
+        headers = {h["name"].lower(): h["value"]
+                   for h in response.get("payload", {}).get("headers", [])}
+        headers["snippet"] = response.get("snippet", "")
+        headers["label_ids"] = response.get("labelIds", [])
+        headers_map[request_id] = headers
+
+    # Gmail batch 每批上限 100 個請求
+    for i in range(0, len(messages), 100):
+        batch = service.new_batch_http_request(callback=_callback)
+        for msg in messages[i:i + 100]:
+            batch.add(
+                service.users().messages().get(
+                    userId="me", id=msg["id"], format="metadata",
+                    metadataHeaders=["From", "Subject", "To"],
+                ),
+                request_id=msg["id"],
+            )
+        batch.execute()
+
+    return headers_map
 
 def apply_label(service, msg_id: str, label_id: str):
     service.users().messages().modify(
@@ -179,35 +205,34 @@ def run():
     log.info("Gmail API 連線成功")
 
     # ── 步驟 1: 建立標籤並整理分類 ──
-    label_map = {}  # name -> label_id
-    for label_cfg in config["labels"]:
-        lid = get_or_create_label(service, label_cfg["name"], label_cfg.get("color", "blue"))
-        label_map[label_cfg["name"]] = lid
+    label_map = build_label_map(service, config["labels"])
 
-    # 搜尋未分類的收件匣郵件
+    # 收件匣只搜尋一次、標頭批次抓一次，步驟 1、2 共用
     log.info("搜尋收件匣郵件...")
-    messages = search_messages(service, "in:inbox", max_results=200)
-    log.info(f"找到 {len(messages)} 封郵件")
+    inbox_messages = search_messages(service, "in:inbox", max_results=200)
+    log.info(f"找到 {len(inbox_messages)} 封郵件")
+    headers_map = batch_get_headers(service, inbox_messages)
 
     label_counts = {name: 0 for name in label_map}
 
-    for msg in messages:
-        try:
-            headers = get_message_headers(service, msg["id"])
+    for msg in inbox_messages:
+        headers = headers_map.get(msg["id"])
+        if headers is None:
+            continue
 
-            # 比對每個分類規則
-            for label_cfg in config["labels"]:
-                if matches_rule(headers, label_cfg["rules"]):
-                    lid = label_map[label_cfg["name"]]
-                    # 若尚未貼上此標籤才操作
-                    if lid not in headers.get("label_ids", []):
+        # 比對每個分類規則
+        for label_cfg in config["labels"]:
+            if matches_rule(headers, label_cfg["rules"]):
+                lid = label_map[label_cfg["name"]]
+                # 若尚未貼上此標籤才操作
+                if lid not in headers.get("label_ids", []):
+                    try:
                         apply_label(service, msg["id"], lid)
                         label_counts[label_cfg["name"]] += 1
                         log.debug(f'  [{label_cfg["name"]}] {headers.get("subject","(無主旨)")[:50]}')
-                    break  # 只套用第一個符合的標籤
-
-        except HttpError as e:
-            log.warning(f"處理郵件 {msg['id']} 失敗: {e}")
+                    except HttpError as e:
+                        log.warning(f"貼標籤 {msg['id']} 失敗: {e}")
+                break  # 只套用第一個符合的標籤
 
     log.info("分類結果:")
     for name, count in label_counts.items():
@@ -218,28 +243,26 @@ def run():
     log.info("搜尋垃圾郵件...")
     spam_rules = config["spam_rules"]
 
-    # Gmail 已標記的垃圾郵件 + 我們自訂的黑名單
+    # Gmail 已標記的垃圾郵件
     spam_messages = search_messages(service, "in:spam", max_results=500)
     log.info(f"Gmail 垃圾桶中有 {len(spam_messages)} 封")
 
-    # 自訂黑名單掃描收件匣
-    inbox_messages = search_messages(service, "in:inbox", max_results=200)
+    # 自訂黑名單掃描收件匣（重用步驟 1 已抓的標頭）
     custom_spam = []
     for msg in inbox_messages:
-        try:
-            headers = get_message_headers(service, msg["id"])
-            if is_spam(headers, spam_rules):
-                custom_spam.append(msg)
-                log.info(f'  偵測垃圾: {headers.get("subject","(無主旨)")[:60]}')
-        except HttpError as e:
-            log.warning(f"檢查郵件 {msg['id']} 失敗: {e}")
+        headers = headers_map.get(msg["id"])
+        if headers is None:
+            continue
+        if is_spam(headers, spam_rules):
+            custom_spam.append(msg)
+            log.info(f'  偵測垃圾: {headers.get("subject","(無主旨)")[:60]}')
 
     trash_mode = spam_rules.get("move_to_trash_instead_of_delete", True)
     action_name = "移至垃圾桶" if trash_mode else "永久刪除"
 
-    # 處理 Gmail 垃圾郵件資料夾
+    # 處理 Gmail 垃圾郵件 + 自訂黑名單偵測到的垃圾
     deleted = 0
-    for msg in spam_messages:
+    for msg in spam_messages + custom_spam:
         try:
             if trash_mode:
                 move_to_trash(service, msg["id"])
@@ -249,30 +272,9 @@ def run():
         except HttpError as e:
             log.warning(f"刪除郵件 {msg['id']} 失敗: {e}")
 
-    # 處理自訂黑名單偵測到的垃圾
-    for msg in custom_spam:
-        try:
-            if trash_mode:
-                move_to_trash(service, msg["id"])
-            else:
-                delete_permanently(service, msg["id"])
-            deleted += 1
-        except HttpError as e:
-            log.warning(f"刪除郵件 {msg['id']} 失敗: {e}")
+    log.info(f"垃圾郵件{action_name}: {deleted} 封")
 
-    log.info(f"垃圾郵件移至垃圾桶: {deleted} 封")
-
-    # ── 步驟 3: 清空垃圾桶（永久刪除）──
-    log.info("清空垃圾桶...")
-    trash_messages = search_messages(service, "in:trash", max_results=1000)
-    purged = 0
-    for msg in trash_messages:
-        try:
-            delete_permanently(service, msg["id"])
-            purged += 1
-        except HttpError as e:
-            log.warning(f"清除郵件 {msg['id']} 失敗: {e}")
-    log.info(f"垃圾桶清空: {purged} 封永久刪除")
+    # 垃圾僅移至垃圾桶，交由 Gmail 30 天後自動清除（不主動永久刪除整個垃圾桶）
     log.info("整理完成！")
     log.info("=" * 60)
 
