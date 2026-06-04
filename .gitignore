@@ -3,6 +3,7 @@ credentials.json
 token.json
 *.json
 !gmail_rules.json
+!appsscript.json
 
 # Log 檔
 *.log

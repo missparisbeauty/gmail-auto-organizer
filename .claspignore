@@ -1,0 +1,4 @@
+# 只推送 Apps Script 需要的檔案，其餘忽略
+**/**
+!gmail_apps_script.js
+!appsscript.json
